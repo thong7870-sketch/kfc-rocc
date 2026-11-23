@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>KFC Store Directory - Tra cứu Nhà hàng</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans pb-12">
+
+  <!-- HEADER -->
+  <header class="bg-[#E4002B] text-white shadow-md sticky top-0 z-30">
+    <div class="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center space-x-2">
+        <span class="bg-white text-[#E4002B] font-black text-xs px-2 py-1 rounded shadow">KFC</span>
+        <div>
+          <h1 class="font-bold text-base leading-tight">Tra cứu Thông tin Nhà hàng</h1>
+          <p class="text-[11px] text-red-100">KFC Vietnam - Hệ thống danh bạ trực tuyến</p>
+        </div>
+      </div>
+      <label for="excelFallback" class="cursor-pointer bg-white text-[#E4002B] hover:bg-red-50 text-xs font-bold px-2.5 py-1.5 rounded-lg shadow active:scale-95 transition flex items-center space-x-1">
+        <span>🔄 Cập nhật File</span>
+      </label>
+      <input type="file" id="excelFallback" accept=".xlsx, .xls, .csv" class="hidden">
+    </div>
+  </header>
+
+  <main class="max-w-3xl mx-auto px-3 py-3 space-y-3">
+
+    <!-- SEARCH BAR -->
+    <div class="bg-white p-3.5 rounded-2xl shadow-sm border border-gray-100 space-y-2">
+      <div class="relative">
+        <input type="text" id="searchInput" autofocus value="PBT"
+               placeholder="Gõ mã viết tắt (PBT, HAN-VOP2, BDN...) hoặc tên nhà hàng..."
+               class="w-full bg-gray-50 text-base md:text-sm pl-9 pr-9 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#E4002B] focus:bg-white font-bold transition">
+        <svg class="w-4 h-4 text-gray-400 absolute left-3 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+        <button id="clearSearch" class="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 font-bold p-1">✕</button>
+      </div>
+      <div class="flex items-center justify-between text-xs text-gray-500 px-1">
+        <span id="statusText">Trạng thái: <b>Đang tải dữ liệu...</b></span>
+        <span>Tìm thấy: <b id="countText" class="text-[#E4002B]">0</b> kết quả</span>
+      </div>
+    </div>
+
+    <!-- DANH SÁCH CHI TIẾT TẤT CẢ CÁC TRƯỜNG -->
+    <div id="results" class="space-y-4"></div>
+
+  </main>
+
+  <script>
+    let records = [];
+    let headers = [];
+
+    function removeAccents(str) {
+      if (!str) return '';
+      return String(str).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    }
+
+    // TỰ ĐỘNG TÌM ĐÚNG DÒNG TIÊU ĐỀ XANH LÁ (KHÔNG BỊ LỆCH CỘT)
+    function parseMatrix(matrix) {
+      let headerIdx = -1;
+      for (let i = 0; i < Math.min(matrix.length, 30); i++) {
+        const rowStr = (matrix[i] || []).join(" ").toLowerCase();
+        if (rowStr.includes("tên nhà hàng") || rowStr.includes("mã nhà hàng") || rowStr.includes("ngày khai trương")) {
+          headerIdx = i;
+          break;
+        }
+      }
+      if (headerIdx === -1) headerIdx = 0;
+
+      headers = [];
+      const headerRow = matrix[headerIdx];
+      for (let c = 0; c < headerRow.length; c++) {
+        const title = String(headerRow[c] || '').trim();
+        if (title.length > 0) {
+          headers.push({ index: c, name: title });
+        }
+      }
+
+      records = [];
+      for (let r = headerIdx + 1; r < matrix.length; r++) {
+        const row = matrix[r];
+        if (!row || row.length === 0) continue;
+
+        const obj = {};
+        let hasVal = false;
+        headers.forEach(h => {
+          const val = row[h.index] !== undefined ? String(row[h.index]).trim() : '';
+          obj[h.name] = val;
+          if (val) hasVal = true;
+        });
+        if (hasVal) records.push(obj);
+      }
+      return records;
+    }
+
+    // HIỂN THỊ ĐỦ VÀ ĐÚNG 100% CÁC TRƯỜNG
+    function render() {
+      const q = removeAccents(document.getElementById('searchInput').value);
+      const clearBtn = document.getElementById('clearSearch');
+      clearBtn.classList.toggle('hidden', q.length === 0);
+
+      const container = document.getElementById('results');
+      const countEl = document.getElementById('countText');
+
+      if (records.length === 0) {
+        container.innerHTML = `
+          <div class="bg-white p-8 rounded-2xl text-center border-2 border-dashed border-red-200">
+            <p class="text-[#E4002B] font-bold text-base mb-1">Đang kết nối dữ liệu nhà hàng...</p>
+            <p class="text-xs text-gray-500">Nếu đợi lâu, vui lòng đảm bảo bạn đã tải tệp <b>data.xlsx</b> lên GitHub.</p>
+          </div>`;
+        countEl.innerText = '0';
+        return;
+      }
+
+      const matched = records.filter(r => {
+        if (!q) return true;
+        return Object.values(r).some(v => removeAccents(v).includes(q));
+      });
+
+      countEl.innerText = matched.length;
+
+      if (matched.length === 0) {
+        container.innerHTML = `
+          <div class="bg-white p-8 rounded-2xl text-center border border-dashed border-gray-300">
+            <p class="text-gray-400 text-sm">Không tìm thấy nhà hàng nào khớp với: <strong class="text-gray-700">"${document.getElementById('searchInput').value}"</strong></p>
+          </div>`;
+        return;
+      }
+
+      container.innerHTML = matched.map((r, i) => {
+        const name = r["Tên Nhà hàng"] || r["Tên nhà hàng"] || "Nhà hàng KFC";
+        const code = r["Mã Nhà hàng"] || r["Mã Nhà hàn"] || r["Mã NH"] || "";
+        const fullCode = r["Mã NH đầy đủ"] || r["Mã NH đầy đ"] || "";
+        const email = r["Email"] || "";
+        const phone = r["Số điện thoại"] || r["Số điện thoại RG"] || "";
+
+        return `
+          <div class="bg-white rounded-2xl p-4 shadow-sm border border-gray-200 space-y-3">
+            <div class="flex items-start justify-between border-b pb-2.5">
+              <div>
+                <div class="flex items-center space-x-1.5">
+                  <span class="bg-[#E4002B] text-white font-black text-xs px-2.5 py-0.5 rounded shadow-sm">
+                    ${code || `MÃ #${i+1}`}
+                  </span>
+                  ${fullCode ? `<span class="text-xs text-gray-500 font-semibold">(${fullCode})</span>` : ''}
+                </div>
+                <h3 class="text-base font-bold text-gray-900 mt-1">${name}</h3>
+              </div>
+              <div class="flex flex-col items-end space-y-1">
+                ${phone ? `<a href="tel:${phone}" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-2.5 py-1 rounded-lg shadow flex items-center space-x-1"><span>📞 ${phone}</span></a>` : ''}
+                ${email ? `<span class="text-[11px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded">✉️ ${email}</span>` : ''}
+              </div>
+            </div>
+
+            <!-- HIỂN THỊ ĐỦ 100% CÁC CỘT THEO ĐÚNG HÀNG TRONG BẢNG -->
+            <div class="divide-y divide-gray-100 border border-gray-100 rounded-xl overflow-hidden bg-gray-50/50">
+              ${headers.map(h => `
+                <div class="grid grid-cols-3 py-2 px-3 text-xs items-center hover:bg-white transition">
+                  <span class="text-gray-500 font-medium col-span-1">${h.name}</span>
+                  <span class="text-gray-900 font-bold col-span-2 ${h.name.includes('Mã') || h.name.includes('Tên') ? 'text-[#E4002B]' : ''}">${r[h.name] || '-'}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // TỰ ĐỘNG ĐỌC FILE DATA.XLSX TỪ GITHUB (HOẠT ĐỘNG TRÊN CẢ ĐIỆN THOẠI)
+    async function autoLoadGithubData() {
+      const statusEl = document.getElementById('statusText');
+      try {
+        statusEl.innerHTML = "Trạng thái: <b class='text-amber-600'>Đang tải dữ liệu KFC...</b>";
+        
+        // Thêm timestamp để luôn lấy dữ liệu mới nhất, không bị trình duyệt lưu cache cũ
+        const response = await fetch('./data.xlsx?v=' + Date.now());
+        if (!response.ok) throw new Error("Chưa tìm thấy file data.xlsx trên GitHub");
+
+        const arrayBuffer = await response.arrayBuffer();
+        const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+
+        // Tự động tìm đúng Tab chứa danh sách nhà hàng
+        let targetSheet = wb.Sheets[wb.SheetNames[0]];
+        for (const sName of wb.SheetNames) {
+          const matrix = XLSX.utils.sheet_to_json(wb.Sheets[sName], { header: 1, defval: "" });
+          const text = matrix.slice(0, 10).map(row => row.join(" ")).join(" ").toLowerCase();
+          if (text.includes("tên nhà hàng") || text.includes("mã nhà hàng")) {
+            targetSheet = wb.Sheets[sName];
+            break;
+          }
+        }
+
+        const matrix = XLSX.utils.sheet_to_json(targetSheet, { header: 1, defval: "" });
+        parseMatrix(matrix);
+
+        if (records.length > 0) {
+          statusEl.innerHTML = `Trạng thái: <b class="text-emerald-600">● Đã sẵn sàng ${records.length} nhà hàng!</b>`;
+          render();
+        } else {
+          statusEl.innerHTML = "Trạng thái: <b class='text-amber-600'>File data.xlsx chưa có dữ liệu hợp lệ</b>";
+        }
+      } catch (err) {
+        statusEl.innerHTML = `Trạng thái: <b class='text-red-600'>Chưa có file data.xlsx trên GitHub (Bấm nút 'Cập nhật File' để chọn file)</b>`;
+        render();
+      }
+    }
+
+    // NÚT DỰ PHÒNG CẬP NHẬT FILE TRỰC TIẾP
+    document.getElementById('excelFallback').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        const data = new Uint8Array(evt.target.result);
+        const wb = XLSX.read(data, { type: 'array' });
+        
+        let targetSheet = wb.Sheets[wb.SheetNames[0]];
+        for (const sName of wb.SheetNames) {
+          const m = XLSX.utils.sheet_to_json(wb.Sheets[sName], { header: 1, defval: "" });
+          const text = m.slice(0, 10).map(row => row.join(" ")).join(" ").toLowerCase();
+          if (text.includes("tên nhà hàng") || text.includes("mã nhà hàng")) {
+            targetSheet = wb.Sheets[sName];
+            break;
+          }
+        }
+
+        const matrix = XLSX.utils.sheet_to_json(targetSheet, { header: 1, defval: "" });
+        parseMatrix(matrix);
+        document.getElementById('statusText').innerHTML = `Trạng thái: <b class="text-emerald-600">● Đã nạp ${records.length} nhà hàng từ file!</b>`;
+        render();
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    document.getElementById('searchInput').addEventListener('input', render);
+    document.getElementById('clearSearch').addEventListener('click', () => {
+      document.getElementById('searchInput').value = '';
+      render();
+      document.getElementById('searchInput').focus();
+    });
+
+    // TỰ ĐỘNG CHẠY KHI MỞ TRANG
+    window.addEventListener('DOMContentLoaded', autoLoadGithubData);
+  </script>
+</body>
+</html>
